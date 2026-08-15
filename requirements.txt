@@ -1,0 +1,2 @@
+# tkinter はPython標準ライブラリです。
+# macOS（Homebrew Python 3.10）: brew install python-tk@3.10
