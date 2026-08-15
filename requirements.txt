@@ -1,2 +1,25 @@
+# 動作確認済み: Python 3.10.21
 # tkinter はPython標準ライブラリです。
 # macOS（Homebrew Python 3.10）: brew install python-tk@3.10
+
+# 直接利用するパッケージ
+mediapipe==0.10.32
+opencv-contrib-python==5.0.0.93
+matplotlib==3.10.9
+
+# 間接依存パッケージ
+absl-py==2.5.0
+cffi==2.1.1
+contourpy==1.3.2
+cycler==0.12.1
+flatbuffers==25.12.19
+fonttools==4.63.0
+kiwisolver==1.5.0
+numpy==2.2.6
+packaging==26.3
+pillow==12.3.0
+pycparser==3.0
+pyparsing==3.3.2
+python-dateutil==2.9.0.post0
+six==1.17.0
+sounddevice==0.5.5
