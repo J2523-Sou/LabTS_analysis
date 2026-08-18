@@ -1,7 +1,7 @@
 # LabTS Analysis
 
-MediaPipe Poseを使い、動画をフレーム単位で骨格推定する研究用プログラムです。
-Tkinterの画面から入力動画、推定条件、出力方法、出力するランドマークを指定できます。
+MediaPipe Poseによる骨格推定と、HSV色空間による色マーカ追跡を行う研究用プログラムです。
+Tkinterの画面から入力動画、解析条件、出力方法を指定できます。
 
 ## 動作環境
 
@@ -26,8 +26,10 @@ LabTS_analysis/
 │   │   ├── get_filepath.py     # 動画選択
 │   │   ├── get_output_settings.py
 │   │   ├── mp_get_parameter.py # Pose設定
+│   │   ├── get_color_marker_parameters.py # 色マーカ設定
 │   │   └── progress_window.py  # 進捗表示
 │   ├── models/                 # MediaPipeモデルの保存先
+│   ├── color_marker.py          # 色マーカ追跡スクリプト
 │   └── mp_pose.py              # 実行スクリプト
 ├── requirements.txt
 └── README.md
@@ -188,7 +190,72 @@ Windows:
 現在の`mp_pose.py`が一度に解析する動画は1本です。複数選択用のライブラリ関数はありますが、
 この実行スクリプトでは使用していません。
 
-## 5. 解析パラメータ
+## 5. 色マーカ追跡の実行
+
+色の付いたマーカを動画から追跡する場合は、プロジェクト直下で実行します。
+
+```bash
+python src/color_marker.py
+```
+
+画面操作は次の順番です。
+
+1. 解析する動画を1本選択します。
+2. 追跡マーカと回転中心マーカの色を、プリセットまたは動画上のクリックで指定します。
+3. CSV、座標グラフ、マーカ追跡動画から1つ以上選択します。
+4. 進捗画面を確認しながら解析します。
+
+色マーカ解析にはランドマーク選択画面は表示されません。追跡マーカと回転中心マーカを
+それぞれ1個ずつ追跡します。同じ色条件を満たす領域が複数ある場合は、その色で面積が
+最大の領域を採用します。
+
+### 色マーカのパラメータ
+
+| 項目 | 初期値 | 説明 |
+| --- | ---: | --- |
+| 色プリセット | 追跡: 緑、中心: 赤 | 赤、黄、緑、青から基準色を選択 |
+| 色相 H | 追跡: `60`、中心: `0` | OpenCVのHSV色相。`0〜179` |
+| 色相の許容幅 | `10` | 基準色相から検出する範囲 |
+| 彩度 S の下限 | `100` | 値が大きいほど鮮やかな色だけを検出 |
+| 明度 V の下限 | `80` | 値が大きいほど明るい色だけを検出 |
+| 最小面積 | `100 px` | 小さなノイズをマーカとして採用しないための面積 |
+
+プリセットを選ぶと色相Hが更新されます。その後、実際の照明やカメラの色に合わせてHを
+微調整できます。赤色は色相の`0`と`179`をまたぐ範囲にも対応しています。
+
+追跡マーカ側または回転中心マーカ側の`動画から色を選択`を押すと、選択済み動画のフレームが
+表示されます。スライダーで各マーカが見やすいフレームへ移動し、マーカ中央をクリックして
+ください。周囲7×7ピクセルから代表HSV値を計算し、選択した側の色相と彩度・明度の下限へ
+反映します。小さいマーカは拡大倍率を最大5倍まで上げ、縦横のスクロールバーで表示位置を
+移動して選択できます。設定画面へ戻った後も、2つのマーカを個別に調整できます。
+
+各フレームでは、2色それぞれについてHSVによる色抽出、5×5カーネルによるノイズ除去、
+輪郭抽出、最大輪郭の重心計算を行います。両方を検出したフレームでは、回転中心から
+追跡マーカまでの相対座標、半径、回転角度も計算します。追跡動画には両方の輪郭、重心、
+直近100点の軌跡、中心と追跡点を結ぶ線を描画します。
+
+結果は`datas/outputs/`へ保存されます。
+
+| ファイル | 内容 |
+| --- | --- |
+| `<動画名>_marker.csv` | 両マーカの重心、相対座標、半径、回転角度 |
+| `<動画名>_marker_coordinates.png` | 両マーカの座標、半径、回転角度のグラフ |
+| `<動画名>_marker_tracking.mp4` | 両マーカの輪郭、重心、軌跡、回転情報を描いた動画 |
+| `<動画名>_marker_analysis_metadata.json` | 色条件、出力設定、SHA-256、処理時間 |
+
+CSVの1行目は次のヘッダーです。未検出フレームも記録し、座標と面積は空欄になります。
+
+```text
+frame,time_seconds,marker_detected,marker_x_pixel,marker_y_pixel,marker_x,marker_y,marker_area_pixels,center_detected,center_x_pixel,center_y_pixel,center_x,center_y,center_area_pixels,relative_x_pixels,relative_y_pixels,relative_x,relative_y,radius_pixels,angle_degrees
+```
+
+`marker_*`は追跡マーカ、`center_*`は回転中心マーカです。`x`と`y`は画像幅・高さに対して
+`0〜1`へ正規化した座標です。相対y座標は画像上方向を正とし、回転角度は画像右方向を
+`0°`、上方向を`90°`として`0〜360°`で出力します。どちらか一方を検出できなかった
+フレームでは、相対座標、半径、角度が空欄になります。JSONには各マーカの検出フレーム数、
+回転計算フレーム数、処理時間、実効FPSも保存します。
+
+## 6. MediaPipe Poseの解析パラメータ
 
 | 項目 | 初期値 | 説明 |
 | --- | ---: | --- |
@@ -227,7 +294,7 @@ Windows:
 指定したデバイスは`requested_delegate`、実際に使用したデバイスは`used_delegate`として
 メタデータJSONへ保存されます。
 
-## 6. 出力結果
+## 7. MediaPipe Poseの出力結果
 
 結果は`datas/outputs/`へ保存されます。
 
@@ -278,7 +345,7 @@ frame,time_seconds,pose_id,x,y,z,visibility,presence
 
 初めてモデルを取得する解析では、ダウンロード時間も総処理時間に含まれます。
 
-## 7. Tkinterライブラリの単体利用
+## 8. Tkinterライブラリの単体利用
 
 ### 動画パスを取得する
 
@@ -313,6 +380,14 @@ from lib.mp_get_parameter import mp_get_parameters
 parameters = mp_get_parameters()  # 決定時はdict、キャンセル時はNone
 ```
 
+### 色マーカパラメータを取得する
+
+```python
+from lib.get_color_marker_parameters import get_color_marker_parameters
+
+parameters = get_color_marker_parameters()
+```
+
 ### 出力設定を取得する
 
 ```python
@@ -320,6 +395,12 @@ from lib.get_output_settings import get_output_settings
 
 landmarks = [(0, "鼻"), (11, "左肩"), (12, "右肩")]
 settings = get_output_settings(landmarks)
+```
+
+色マーカ解析など項目選択が不要な場合は、一覧を渡さずに使用できます。
+
+```python
+settings = get_output_settings(video_label="マーカ追跡動画")
 ```
 
 ### 進捗を表示する
@@ -334,7 +415,26 @@ with ProgressWindow(total=100, title="解析中") as progress:
         progress.update(index + 1, "処理しています")
 ```
 
-## 8. トラブルシューティング
+## 9. トラブルシューティング
+
+## 10. MediaPipe + Optical Flow解析
+
+一定フレームごとにMediaPipe Poseで骨格を再推定し、間のフレームではOpenCVのLucas–Kanade
+Optical Flow（`calcOpticalFlowPyrLK`）でランドマークを追跡する実行スクリプトも利用できます。
+
+```bash
+python src/mp_pose_optical_flow.py
+```
+
+動画選択、Pose設定、出力設定、Optical Flow間隔設定は`src/lib/`の共用ライブラリを使用します。
+追加で「MediaPipeを実行する間隔（フレーム）」を指定します。例えば`5`なら0、5、10…フレームでMediaPipeを実行し、その他の
+フレームをOptical Flowで追跡します。各再推定時に追跡点を補正するため、間隔を大きくしすぎると
+追跡誤差が増える一方、処理時間は短くなります。
+
+出力ファイル名には`_optical_flow`が付きます。CSVには推定元を示す`source`列が追加され、
+`mediapipe`または`optical_flow`が記録されます。複数人物を検出した場合は、MediaPipeが返す
+人物番号をフレーム間で対応付けて追跡します。大きな遮蔽や人物の入れ替わりがある動画では、
+再推定間隔を短くしてください。
 
 ### `ModuleNotFoundError: No module named '_tkinter'`
 
@@ -367,6 +467,15 @@ python -m pip install -r requirements.txt
 
 メタデータJSONの`used_delegate`を確認してください。GPUが使われていても、動画デコード、
 色変換、骨格描画、CSV書き込み、動画圧縮、進捗画面はCPU側で動くため、速度差が小さい場合があります。
+
+### 色マーカを検出できない／別の物体を検出する
+
+- 実物に近い色プリセットを選ぶ
+- 色相Hと許容幅を少しずつ調整する
+- 暗い環境では明度Vの下限を下げる
+- 白っぽいマーカでは彩度Sの下限を下げる
+- 小さいマーカでは最小面積を下げる
+- 背景に同色がある場合は背景を変更するか、マーカを大きくして最小面積を上げる
 
 ### モデルをダウンロードできない
 
