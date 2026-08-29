@@ -27,11 +27,15 @@ LabTS_analysis/
 │   │   ├── get_output_settings.py
 │   │   ├── mp_get_parameter.py # Pose設定
 │   │   ├── get_color_marker_parameters.py # 色マーカ設定
+│   │   ├── rtmpose_get_parameter.py # RTMPose設定
 │   │   └── progress_window.py  # 進捗表示
 │   ├── models/                 # MediaPipeモデルの保存先
 │   ├── color_marker.py          # 色マーカ追跡スクリプト
+│   ├── rtmpose.py               # RTMPose実行スクリプト
 │   └── mp_pose.py              # 実行スクリプト
 ├── requirements.txt
+├── scripts/
+│   └── install_rtmpose_apple_silicon.sh
 └── README.md
 ```
 
@@ -150,6 +154,9 @@ python -m pip check
 | `opencv-contrib-python` | 動画の読み込み、描画、動画出力 |
 | `matplotlib` | 座標グラフの出力 |
 
+RTMPoseはPyTorch・MMPose系の追加パッケージを使用します。利用する場合は、後述の
+「RTMPoseの導入と実行」も実施してください。
+
 ## 4. mp_pose.pyの実行
 
 仮想環境を有効にして、プロジェクト直下で実行します。
@@ -190,7 +197,93 @@ Windows:
 現在の`mp_pose.py`が一度に解析する動画は1本です。複数選択用のライブラリ関数はありますが、
 この実行スクリプトでは使用していません。
 
-## 5. 色マーカ追跡の実行
+## 5. RTMPoseの導入と実行
+
+RTMPose版はOpenMMLabのMMPoseを利用し、人物検出にMMDetectionを使用します。
+PyTorchとCUDAの組み合わせはOS・GPUによって異なるため、先に
+[PyTorch公式のインストール手順](https://pytorch.org/get-started/locally/)で、環境に合う
+`torch`と`torchvision`をインストールしてください。NVIDIA GPUを使う場合は、表示される
+CUDA版のコマンドを使用します。Apple SiliconではmacOS向けの通常版PyTorchにMPS対応が
+含まれます。
+
+Apple Siliconでは、プロジェクト直下で次の導入スクリプトを実行します。MMCVをローカルで
+コンパイルするため、完了まで数分かかる場合があります。
+
+```bash
+sh scripts/install_rtmpose_apple_silicon.sh
+```
+
+導入後、MPSが利用可能か次で確認します。`MPS available: True`ならMetal GPUを利用できます。
+
+```bash
+.venv/bin/python -c 'import torch; print("MPS built:", torch.backends.mps.is_built()); print("MPS available:", torch.backends.mps.is_available())'
+```
+
+このコマンドでは`.venv/bin/python`を明示しています。`python`だけで実行して
+`ModuleNotFoundError: No module named 'torch'`になる場合は、仮想環境外のPythonを実行して
+います。
+
+Apple Silicon以外では、仮想環境を有効にした状態でOpenMMLabのパッケージを導入します。
+
+```bash
+python -m pip install -U openmim
+mim install "mmengine"
+mim install "mmcv>=2.0.1"
+mim install "mmdet>=3.1.0"
+mim install "mmpose>=1.3.2"
+python -m pip check
+```
+
+MMCVはPyTorch・CUDAとの組み合わせに対応するビルドが必要です。`mmcv._ext`に関する
+エラーが出る場合は、PyTorchのCUDA版とMMCVの組み合わせを確認してからMMCVを再導入して
+ください。
+
+プロジェクト直下から実行します。
+
+```bash
+.venv/bin/python src/rtmpose.py
+```
+
+画面操作は次の順番です。
+
+1. 解析する動画を複数選択するか、解析するフォルダーを選択します。
+2. RTMPoseモデル、人物検出器、検出人数上限、各信頼度、CPU／CUDA／MPSを指定します。
+3. CSV、座標グラフ、骨格線入り動画と、出力するキーポイントを指定します。
+4. 進捗画面を確認しながら解析します。
+
+フォルダーを選択した場合は、フォルダー内の動画をサブフォルダーも含めて再帰的に解析します。
+出力先は`datas/outputs/<選択フォルダー名>/`となり、入力フォルダーからの相対構成をそのまま
+再現します。例えば`input/a/trial01.MOV`は`datas/outputs/input/a/trial01_...`として保存されます。
+動画を個別に複数選択した場合は、従来どおり`datas/outputs/`直下へ保存します。
+
+姿勢モデルの初期値`human`は、MMPose公式のRTMPose-m人体モデルのエイリアスで、COCO人体
+17点を出力します。`body26`を選択するとHalpe 26点へ切り替わり、頭頂、首、腰中心、左右の
+母趾・小趾・かかとを追加で取得できます。出力設定画面のキーポイント一覧と骨格線も、選択した
+モデルに合わせて自動的に17点／26点へ切り替わります。
+
+人物検出器の初期値`auto`は、選択した姿勢モデルに紐づく公式の既定検出器を使用します。
+通常は変更不要です。独自のMMDetection設定を使う場合だけ、モデル名または設定ファイルのパスを
+直接入力してください。
+
+初回実行時には姿勢モデルと人物検出モデルが自動ダウンロードされるため、インターネット接続と
+空き容量が必要です。設定画面にはMMPoseのモデル名または設定ファイルのパスも直接入力できます。
+モデル指定が`body26`、または名前に`halpe26`を含む場合はHalpe 26点として扱い、それ以外は
+COCO人体17点として扱います。独自モデルを指定するときは、どちらかの形式を使用してください。
+
+処理デバイスを「自動」にすると、CUDAが利用できる場合は`cuda:0`、Apple SiliconでMPSが
+利用できる場合は`mps`、それ以外はCPUを使用します。GPUを明示的に選んでも利用できない場合や
+初期化に失敗した場合はCPUへ切り替えます。Apple Siliconでは、MMCVのNMSがMPSに対応して
+いないため、人物検出器RTMDetをCPU、姿勢推定RTMPoseをMPSで動かすハイブリッド構成を使用
+します。その他のMPS未対応PyTorch演算は、その演算だけCPUへフォールバックします。それでも
+フレーム推論に失敗した場合は、RTMPose推論器全体をCPUで再初期化して同じフレームを再処理
+します。姿勢推定と人物検出で実際に使用したデバイスは、メタデータJSONの`used_device`と
+`detector_device`で確認できます。
+
+結果は`datas/outputs/`へ保存されます。CSVには正規化座標、ピクセル座標、キーポイント信頼度、
+人物BBox信頼度を記録します。RTMPoseは2Dモデルのため、Z座標は出力しません。複数人の
+`pose_id`は各フレームで左から順に付与され、人物を継続追跡するIDではありません。
+
+## 6. 色マーカ追跡の実行
 
 色の付いたマーカを動画から追跡する場合は、プロジェクト直下で実行します。
 
@@ -255,7 +348,7 @@ frame,time_seconds,marker_detected,marker_x_pixel,marker_y_pixel,marker_x,marker
 フレームでは、相対座標、半径、角度が空欄になります。JSONには各マーカの検出フレーム数、
 回転計算フレーム数、処理時間、実効FPSも保存します。
 
-## 6. MediaPipe Poseの解析パラメータ
+## 7. MediaPipe Poseの解析パラメータ
 
 | 項目 | 初期値 | 説明 |
 | --- | ---: | --- |
@@ -294,7 +387,7 @@ frame,time_seconds,marker_detected,marker_x_pixel,marker_y_pixel,marker_x,marker
 指定したデバイスは`requested_delegate`、実際に使用したデバイスは`used_delegate`として
 メタデータJSONへ保存されます。
 
-## 7. MediaPipe Poseの出力結果
+## 8. MediaPipe Poseの出力結果
 
 結果は`datas/outputs/`へ保存されます。
 
@@ -345,7 +438,7 @@ frame,time_seconds,pose_id,x,y,z,visibility,presence
 
 初めてモデルを取得する解析では、ダウンロード時間も総処理時間に含まれます。
 
-## 8. Tkinterライブラリの単体利用
+## 9. Tkinterライブラリの単体利用
 
 ### 動画パスを取得する
 
@@ -378,6 +471,14 @@ python your_script.py
 from lib.mp_get_parameter import mp_get_parameters
 
 parameters = mp_get_parameters()  # 決定時はdict、キャンセル時はNone
+```
+
+### RTMPoseパラメータを取得する
+
+```python
+from lib.rtmpose_get_parameter import rtmpose_get_parameters
+
+parameters = rtmpose_get_parameters()  # 決定時はdict、キャンセル時はNone
 ```
 
 ### 色マーカパラメータを取得する
@@ -415,8 +516,6 @@ with ProgressWindow(total=100, title="解析中") as progress:
         progress.update(index + 1, "処理しています")
 ```
 
-## 9. トラブルシューティング
-
 ## 10. MediaPipe + Optical Flow解析
 
 一定フレームごとにMediaPipe Poseで骨格を再推定し、間のフレームではOpenCVのLucas–Kanade
@@ -435,6 +534,8 @@ python src/mp_pose_optical_flow.py
 `mediapipe`または`optical_flow`が記録されます。複数人物を検出した場合は、MediaPipeが返す
 人物番号をフレーム間で対応付けて追跡します。大きな遮蔽や人物の入れ替わりがある動画では、
 再推定間隔を短くしてください。
+
+## 11. トラブルシューティング
 
 ### `ModuleNotFoundError: No module named '_tkinter'`
 
@@ -463,6 +564,11 @@ python -m pip install -r requirements.txt
 - MP4（H.264など）へ変換してから再試行する
 - 出力先へ書き込む権限と空き容量を確認する
 
+RTMPoseでは、`timebase ... not supported by MPEG 4`と表示される高フレームレート動画にも
+対応しています。入力FPSはCSVの時刻計算にそのまま使用し、骨格動画の書き出しFPSだけを
+MPEG-4で安全に表現できる小数2桁へ丸めます。元FPSと出力FPSはメタデータJSONの
+`video.source_fps`と`video.output_fps`で確認できます。
+
 ### GPUを選んでも速くならない
 
 メタデータJSONの`used_delegate`を確認してください。GPUが使われていても、動画デコード、
@@ -489,3 +595,6 @@ python -m pip install -r requirements.txt
 - [Python: tkinter公式ドキュメント](https://docs.python.org/3/library/tkinter.html)
 - [MediaPipe Pose Landmarker for Python](https://ai.google.dev/edge/mediapipe/solutions/vision/pose_landmarker/python)
 - [BlazePose GHUM 3D Model Card](https://storage.googleapis.com/mediapipe-assets/Model%20Card%20BlazePose%20GHUM%203D.pdf)
+- [MMPose: RTMPoseモデル](https://github.com/open-mmlab/mmpose/tree/main/configs/body_2d_keypoint/rtmpose)
+- [MMPose: Inferencer API](https://github.com/open-mmlab/mmpose/blob/main/docs/en/user_guides/inference.md)
+- [PyTorch: MPS backend](https://docs.pytorch.org/docs/stable/notes/mps.html)
