@@ -2,13 +2,34 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 
 
+MODEL_DESCRIPTIONS = {
+    "rtmpose-t_8xb1024-700e_body8-halpe26-256x192":
+        "T: 最軽量。処理時間を短くしたい場合向け。精度は7種類の中で低め。",
+    "rtmpose-s_8xb1024-700e_body8-halpe26-256x192":
+        "S: 軽量モデル。速度と精度のバランスを重視する場合向け。",
+    "rtmpose-m_8xb512-700e_body8-halpe26-256x192":
+        "M: 標準モデル。現在の初期値。速度と精度のバランス型。",
+    "rtmpose-l_8xb512-700e_body8-halpe26-256x192":
+        "L: 高精度モデル。Mより計算量が大きく、処理時間も長い。",
+    "rtmpose-m_8xb512-700e_body8-halpe26-384x288":
+        "M・高解像度: Mサイズのまま入力を高解像度化。細部の精度重視。",
+    "rtmpose-l_8xb512-700e_body8-halpe26-384x288":
+        "L・高解像度: 高精度と高解像度を両立。処理時間はかなり長い。",
+    "rtmpose-x_8xb256-700e_body8-halpe26-384x288":
+        "X・高解像度: 最高精度寄り。最も計算量とメモリ使用量が大きい。",
+}
+
+
 def rtmpose_get_parameters():
     """RTMPose/MMPoseの推論設定をGUIから取得する。"""
     root = tk.Tk()
     root.title("RTMPose 設定")
     root.resizable(False, False)
 
-    model = tk.StringVar(value="human")
+    model = tk.StringVar(
+        value="rtmpose-m_8xb512-700e_body8-halpe26-256x192"
+    )
+    model_description = tk.StringVar()
     detector = tk.StringVar(value="auto")
     max_instances = tk.IntVar(value=1)
     bbox_threshold = tk.DoubleVar(value=0.30)
@@ -62,16 +83,27 @@ def rtmpose_get_parameters():
         print("[DEBUG] RTMPose Settings Canceled")
         root.destroy()
 
+    def update_model_description(*_args):
+        model_description.set(
+            MODEL_DESCRIPTIONS.get(
+                model.get(),
+                "カスタムモデル。Halpe26点対応のモデル名または設定ファイルを指定してください。",
+            )
+        )
+
     padding = {"padx": 12, "pady": 5}
     ttk.Label(root, text="姿勢モデル").grid(row=0, column=0, sticky="e", **padding)
     ttk.Combobox(
         root,
         textvariable=model,
         values=[
-            "human",
-            "body26",
-            "rtmpose-m_8xb256-420e_body8-256x192",
+            "rtmpose-t_8xb1024-700e_body8-halpe26-256x192",
+            "rtmpose-s_8xb1024-700e_body8-halpe26-256x192",
             "rtmpose-m_8xb512-700e_body8-halpe26-256x192",
+            "rtmpose-l_8xb512-700e_body8-halpe26-256x192",
+            "rtmpose-m_8xb512-700e_body8-halpe26-384x288",
+            "rtmpose-l_8xb512-700e_body8-halpe26-384x288",
+            "rtmpose-x_8xb256-700e_body8-halpe26-384x288",
         ],
         width=39,
     ).grid(row=0, column=1, columnspan=3, sticky="w", **padding)
@@ -81,9 +113,13 @@ def rtmpose_get_parameters():
     )
     ttk.Label(
         root,
-        text="モデル名・設定ファイルのパスを直接入力できます",
+        textvariable=model_description,
         foreground="#555555",
+        wraplength=430,
+        justify="left",
     ).grid(row=2, column=1, columnspan=3, sticky="w", padx=12)
+    model.trace_add("write", update_model_description)
+    update_model_description()
 
     ttk.Label(root, text="検出する人数（上限）").grid(
         row=3, column=0, sticky="e", **padding

@@ -9,6 +9,7 @@ import mediapipe as mp
 import numpy as np
 
 from lib.get_filepath import get_filepath
+from lib.cli import CliProgressWindow, ask_int, cli_requested, mediapipe_parameters_cli, output_settings_cli, select_videos_cli
 from lib.get_output_settings import get_output_settings
 from lib.mp_get_parameter import mp_get_parameters
 from lib.optical_flow_get_parameter import get_optical_flow_parameters
@@ -25,13 +26,14 @@ from mp_pose import (
 )
 
 
-def process_video(video_path, parameters, output_settings, interval, progress):
+def process_video(video_path, parameters, output_settings, interval, progress, output_dir=None):
     started = perf_counter()
     video = cv2.VideoCapture(video_path)
     if not video.isOpened():
         raise RuntimeError(f"動画を開けませんでした: {video_path}")
 
-    OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
+    output_dir = Path(output_dir) if output_dir else OUTPUTS_DIR
+    output_dir.mkdir(parents=True, exist_ok=True)
     name = Path(video_path).stem
     fps = video.get(cv2.CAP_PROP_FPS) or 30.0
     width = int(video.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -49,7 +51,7 @@ def process_video(video_path, parameters, output_settings, interval, progress):
     writers, files, graphs = {}, {}, {}
     if output_settings["csv"]:
         for landmark_id in selected:
-            path = OUTPUTS_DIR / f"{name}_landmark_{landmark_id}_optical_flow.csv"
+            path = output_dir / f"{name}_landmark_{landmark_id}_optical_flow.csv"
             file = path.open("w", newline="", encoding="utf-8")
             writer = csv.writer(file)
             writer.writerow(["frame", "time_seconds", "pose_id", "x", "y", "z", "visibility", "presence", "source"])
@@ -57,13 +59,13 @@ def process_video(video_path, parameters, output_settings, interval, progress):
 
     output_video = None
     if output_settings["skeleton_video"]:
-        path = OUTPUTS_DIR / f"{name}_skeleton_optical_flow.mp4"
+        path = output_dir / f"{name}_skeleton_optical_flow.mp4"
         output_video = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (width, height))
 
     previous_gray = None
     tracked = []
     frame_number = 0
-    metadata_path = OUTPUTS_DIR / f"{name}_optical_flow_analysis_metadata.json"
+    metadata_path = output_dir / f"{name}_optical_flow_analysis_metadata.json"
 
     try:
         with landmarker:
@@ -116,13 +118,26 @@ def process_video(video_path, parameters, output_settings, interval, progress):
 
     if output_settings["coordinate_graph"]:
         for landmark_id in selected:
-            save_coordinate_graph(graphs, OUTPUTS_DIR / f"{name}_landmark_{landmark_id}_optical_flow_coordinates.png", landmark_id, metadata)
+            save_coordinate_graph(graphs, output_dir / f"{name}_landmark_{landmark_id}_optical_flow_coordinates.png", landmark_id, metadata)
     metadata.update({"processed_frames": frame_number, "canceled": progress.is_canceled,
                      "timing": {"total_processing_seconds": round(perf_counter() - started, 6)}})
     metadata_path.write_text(__import__("json").dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def main():
+    if cli_requested():
+        video_paths, input_root = select_videos_cli()
+        if not video_paths:
+            return
+        parameters = mediapipe_parameters_cli()
+        interval = ask_int("MediaPipeを実行する間隔（フレーム）", 5, 1)
+        settings = output_settings_cli(POSE_LANDMARKS)
+        for video_path in video_paths:
+            output_dir = OUTPUTS_DIR / input_root.name / video_path.parent.relative_to(input_root) if input_root else OUTPUTS_DIR
+            with CliProgressWindow(count_total_frames(video_path), "Pose + Optical Flow 解析") as progress:
+                process_video(video_path, parameters, settings, interval, progress, output_dir)
+        return
+
     video_path = get_filepath()
     if not video_path: return
     parameters = mp_get_parameters()

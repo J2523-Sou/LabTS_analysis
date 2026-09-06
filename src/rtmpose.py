@@ -13,6 +13,7 @@ from pathlib import Path
 import platform
 from time import perf_counter
 from typing import Any, Iterable
+import uuid
 
 # MPS未実装のPyTorch演算だけCPUで実行する。torch/mmposeより先に設定する必要がある。
 os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
@@ -23,6 +24,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+from lib.cli import CliProgressWindow, ask, ask_bool, ask_float, ask_int, cli_requested, output_settings_cli, select_videos_cli
 from lib.get_filepath import get_video_selection
 from lib.get_output_settings import get_output_settings
 from lib.progress_window import ProgressWindow
@@ -374,6 +376,7 @@ def draw_pose(frame, instance: dict[str, Any], parameters: dict[str, Any]) -> No
 def draw_metadata(frame, metadata: dict[str, Any]) -> None:
     parameters = metadata["rtmpose_parameters"]
     lines = [
+        f"analysis_id={metadata['analysis_id'][:12]}",
         (
             f"RTMPose {parameters['model']} | pose={metadata['used_device']} "
             f"detector={metadata.get('detector_device', metadata['used_device'])}"
@@ -387,18 +390,29 @@ def draw_metadata(frame, metadata: dict[str, Any]) -> None:
         f"landmarks={','.join(metadata['selected_landmarks']) or 'none'}",
     ]
     width = min(frame.shape[1] - 1, 760)
-    cv2.rectangle(frame, (5, 5), (width, 72), (0, 0, 0), -1)
+    cv2.rectangle(frame, (5, 5), (width, 92), (0, 0, 0), -1)
     for index, line in enumerate(lines):
         cv2.putText(
             frame,
             line,
-            (12, 25 + index * 20),
+            (12, 20 + index * 18),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.45,
             (255, 255, 255),
             1,
             cv2.LINE_AA,
         )
+
+
+def processing_status(video_path: str | Path, metadata: dict[str, Any]) -> str:
+    """進捗画面に表示する解析方式と実使用デバイスを返す。"""
+    parameters = metadata["rtmpose_parameters"]
+    return (
+        f"RTMPose解析: {Path(video_path).name} | "
+        f"model={parameters['model']} | "
+        f"pose={metadata['used_device']} "
+        f"detector={metadata.get('detector_device', metadata['used_device'])}"
+    )
 
 
 def save_coordinate_graph(
@@ -495,6 +509,7 @@ def create_metadata(
         str(item): landmark_names[item] for item in output_settings["landmarks"]
     }
     return {
+        "analysis_id": uuid.uuid4().hex,
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "analysis_method": "mmpose_rtmpose_2d",
         "pose_layout": pose_layout_for_model(parameters["model"]),
@@ -516,6 +531,12 @@ def create_metadata(
         },
         "requested_device": parameters["device"],
         "used_device": used_device,
+        "processor": {
+            "pose_inference_device": used_device,
+            "detector_device": None,
+            "host_processor": platform.processor() or platform.uname().processor,
+            "host_machine": platform.machine(),
+        },
         "rtmpose_parameters": parameters,
         "output_settings": output_settings,
         "selected_landmarks": selected,
@@ -547,6 +568,7 @@ def _open_csv_outputs(
                 "y_pixels",
                 "keypoint_score",
                 "bbox_score",
+                "analysis_id",
             ]
         )
         files[landmark_id] = file
@@ -582,10 +604,12 @@ def process_video(
         metadata["detector_device"] = getattr(
             inferencer, "detector_device", used_device
         )
+        metadata["processor"]["detector_device"] = metadata["detector_device"]
     except Exception:
         video.release()
         raise
     metadata["timing"] = {"started_at_utc": datetime.now(timezone.utc).isoformat()}
+    progress.update(0, processing_status(video_path, metadata))
     metadata_path = output_dir / f"{video_name}_rtmpose_analysis_metadata.json"
     metadata_path.write_text(
         json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -627,9 +651,11 @@ def process_video(
             if actual_device != used_device:
                 used_device = actual_device
                 metadata["used_device"] = actual_device
+                metadata["processor"]["pose_inference_device"] = actual_device
             metadata["detector_device"] = getattr(
                 inferencer, "detector_device", used_device
             )
+            metadata["processor"]["detector_device"] = metadata["detector_device"]
             time_seconds = frame_number / fps
 
             for pose_id, instance in enumerate(instances):
@@ -656,6 +682,7 @@ def process_video(
                                 y_pixels,
                                 score,
                                 bbox_score,
+                                metadata["analysis_id"],
                             ]
                         )
                     if output_settings["coordinate_graph"]:
@@ -671,7 +698,18 @@ def process_video(
             if not instances:
                 for writer in csv_writers.values():
                     writer.writerow(
-                        [frame_number, time_seconds, "", "", "", "", "", "", ""]
+                        [
+                            frame_number,
+                            time_seconds,
+                            "",
+                            "",
+                            "",
+                            "",
+                            "",
+                            "",
+                            "",
+                            metadata["analysis_id"],
+                        ]
                     )
 
             if output_video:
@@ -679,7 +717,7 @@ def process_video(
                 output_video.write(frame)
 
             frame_number += 1
-            progress.update(frame_number, f"RTMPose解析中: {Path(video_path).name}")
+            progress.update(frame_number, processing_status(video_path, metadata))
     finally:
         inference_seconds = perf_counter() - inference_started
         video.release()
@@ -701,6 +739,7 @@ def process_video(
             "canceled": progress.is_canceled,
         }
     )
+    metadata["processor"]["pose_inference_device"] = metadata["used_device"]
     metadata["timing"].update(
         {
             "finished_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -718,17 +757,42 @@ def process_video(
 
 
 def main() -> None:
-    video_paths, input_root, is_folder = get_video_selection()
+    if cli_requested():
+        video_paths, input_root = select_videos_cli()
+        is_folder = input_root is not None
+    else:
+        video_paths, input_root, is_folder = get_video_selection()
     if not video_paths:
         return
-    parameters = rtmpose_get_parameters()
-    if parameters is None:
-        return
-    output_settings = get_output_settings(
-        landmarks_for_model(parameters["model"]),
-        item_label="キーポイント",
-        video_label="RTMPose骨格線入り動画",
-    )
+    if cli_requested():
+        parameters = {
+            "model": ask(
+                "RTMPoseモデル",
+                "rtmpose-m_8xb512-700e_body8-halpe26-256x192",
+            ),
+            "detector": ask("人物検出器 (autoまたは設定)", "auto"),
+            "max_instances": ask_int("検出する人数", 1, 1),
+            "bbox_threshold": ask_float("BBoxしきい値", 0.3, 0, 1),
+            "nms_threshold": ask_float("NMSしきい値", 0.3, 0, 1),
+            "keypoint_threshold": ask_float("キーポイントしきい値", 0.3, 0, 1),
+            "device": ask("処理デバイス (AUTO/CPU/CUDA/MPS)", "AUTO").upper(),
+            "cuda_index": ask_int("CUDA番号", 0, 0),
+            "draw_bbox": ask_bool("BBoxを描画", True),
+            "radius": ask_int("キーポイント半径", 3, 1),
+            "thickness": ask_int("骨格線の太さ", 2, 1),
+        }
+    else:
+        parameters = rtmpose_get_parameters()
+        if parameters is None:
+            return
+    if cli_requested():
+        output_settings = output_settings_cli(landmarks_for_model(parameters["model"]))
+    else:
+        output_settings = get_output_settings(
+            landmarks_for_model(parameters["model"]),
+            item_label="キーポイント",
+            video_label="RTMPose骨格線入り動画",
+        )
     if output_settings is None:
         return
     root_path = Path(input_root) if is_folder and input_root else None
@@ -739,7 +803,8 @@ def main() -> None:
             output_dir = OUTPUTS_DIR / root_path.name / relative_parent
         else:
             output_dir = OUTPUTS_DIR
-        with ProgressWindow(
+        progress_class = CliProgressWindow if cli_requested() else ProgressWindow
+        with progress_class(
             count_total_frames(video_path), f"RTMPose 解析: {video_path.name}"
         ) as progress:
             process_video(

@@ -15,6 +15,7 @@ import matplotlib.pyplot as plt
 import mediapipe as mp
 
 from lib.get_filepath import get_filepath
+from lib.cli import CliProgressWindow, cli_requested, mediapipe_parameters_cli, output_settings_cli, select_videos_cli
 from lib.get_output_settings import get_output_settings
 from lib.mp_get_parameter import mp_get_parameters
 from lib.progress_window import ProgressWindow
@@ -277,7 +278,7 @@ def count_total_frames(video_path):
     return max(total, 1)
 
 # 骨格推定本体
-def process_video(video_path, parameters, output_settings, progress):
+def process_video(video_path, parameters, output_settings, progress, output_dir=None):
     total_processing_started = perf_counter()
     processing_started_at = datetime.now(timezone.utc)
     video = cv2.VideoCapture(video_path)
@@ -285,7 +286,8 @@ def process_video(video_path, parameters, output_settings, progress):
         print(f"[ERROR] 動画を開けませんでした: {video_path}")
         return
 
-    OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
+    output_dir = Path(output_dir) if output_dir else OUTPUTS_DIR
+    output_dir.mkdir(parents=True, exist_ok=True)
     video_name = Path(video_path).stem
     fps = video.get(cv2.CAP_PROP_FPS) or 30
     width = int(video.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -303,14 +305,14 @@ def process_video(video_path, parameters, output_settings, progress):
     metadata["timing"] = {
         "started_at_utc": processing_started_at.isoformat(),
     }
-    metadata_path = OUTPUTS_DIR / f"{video_name}_analysis_metadata.json"
+    metadata_path = output_dir / f"{video_name}_analysis_metadata.json"
     metadata_path.write_text(
         json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8"
     )
 
     if output_settings["csv"]:
         for landmark_id in selected_landmarks:
-            csv_path = OUTPUTS_DIR / f"{video_name}_landmark_{landmark_id}.csv"
+            csv_path = output_dir / f"{video_name}_landmark_{landmark_id}.csv"
             csv_files[landmark_id] = csv_path.open(
                 "w", newline="", encoding="utf-8"
             )
@@ -329,7 +331,7 @@ def process_video(video_path, parameters, output_settings, progress):
             )
 
     if output_settings["skeleton_video"]:
-        output_path = OUTPUTS_DIR / f"{video_name}_skeleton.mp4"
+        output_path = output_dir / f"{video_name}_skeleton.mp4"
         codec = cv2.VideoWriter_fourcc(*"mp4v")
         output_video = cv2.VideoWriter(
             str(output_path), codec, fps, (width, height)
@@ -430,7 +432,7 @@ def process_video(video_path, parameters, output_settings, progress):
     if output_settings["coordinate_graph"]:
         for landmark_id in selected_landmarks:
             graph_path = (
-                OUTPUTS_DIR / f"{video_name}_landmark_{landmark_id}_coordinates.png"
+                output_dir / f"{video_name}_landmark_{landmark_id}_coordinates.png"
             )
             save_coordinate_graph(graph_data, graph_path, landmark_id, metadata)
 
@@ -452,6 +454,19 @@ def process_video(video_path, parameters, output_settings, progress):
 
 
 def main():
+    if cli_requested():
+        video_paths, input_root = select_videos_cli()
+        if not video_paths:
+            return
+        parameters = mediapipe_parameters_cli()
+        output_settings = output_settings_cli(POSE_LANDMARKS, "video")
+        root_path = input_root
+        for video_path in video_paths:
+            output_dir = OUTPUTS_DIR / root_path.name / video_path.parent.relative_to(root_path) if root_path else OUTPUTS_DIR
+            with CliProgressWindow(count_total_frames(video_path), "MediaPipe Pose 解析") as progress:
+                process_video(video_path, parameters, output_settings, progress, output_dir)
+        return
+
     video_path = get_filepath()
     if not video_path:
         return

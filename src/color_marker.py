@@ -14,6 +14,7 @@ import numpy as np
 
 from lib.get_color_marker_parameters import get_color_marker_parameters
 from lib.get_filepath import get_filepath
+from lib.cli import CliProgressWindow, ask, ask_float, ask_int, cli_requested, output_settings_cli, select_videos_cli
 from lib.get_output_settings import get_output_settings
 from lib.progress_window import ProgressWindow
 
@@ -268,20 +269,21 @@ def create_metadata(video_path, parameters, output_settings, started_at):
     }
 
 
-def process_video(video_path, parameters, output_settings, progress):
+def process_video(video_path, parameters, output_settings, progress, output_dir=None):
     total_started = perf_counter()
     started_at = datetime.now(timezone.utc)
     video = cv2.VideoCapture(video_path)
     if not video.isOpened():
         raise RuntimeError(f"動画を開けませんでした: {video_path}")
 
-    OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
+    output_dir = Path(output_dir) if output_dir else OUTPUTS_DIR
+    output_dir.mkdir(parents=True, exist_ok=True)
     video_name = Path(video_path).stem
     fps = video.get(cv2.CAP_PROP_FPS) or 30
     width = int(video.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(video.get(cv2.CAP_PROP_FRAME_HEIGHT))
     metadata = create_metadata(video_path, parameters, output_settings, started_at)
-    metadata_path = OUTPUTS_DIR / f"{video_name}_marker_analysis_metadata.json"
+    metadata_path = output_dir / f"{video_name}_marker_analysis_metadata.json"
     metadata_path.write_text(
         json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8"
     )
@@ -289,7 +291,7 @@ def process_video(video_path, parameters, output_settings, progress):
     csv_file = None
     csv_writer = None
     if output_settings["csv"]:
-        csv_path = OUTPUTS_DIR / f"{video_name}_marker.csv"
+        csv_path = output_dir / f"{video_name}_marker.csv"
         csv_file = csv_path.open("w", newline="", encoding="utf-8")
         csv_writer = csv.writer(csv_file)
         csv_writer.writerow(
@@ -319,7 +321,7 @@ def process_video(video_path, parameters, output_settings, progress):
 
     output_video = None
     if output_settings["video"]:
-        output_path = OUTPUTS_DIR / f"{video_name}_marker_tracking.mp4"
+        output_path = output_dir / f"{video_name}_marker_tracking.mp4"
         output_video = cv2.VideoWriter(
             str(output_path),
             cv2.VideoWriter_fourcc(*"mp4v"),
@@ -434,7 +436,7 @@ def process_video(video_path, parameters, output_settings, progress):
     )
 
     if output_settings["coordinate_graph"]:
-        graph_path = OUTPUTS_DIR / f"{video_name}_marker_coordinates.png"
+        graph_path = output_dir / f"{video_name}_marker_coordinates.png"
         save_coordinate_graph(records, graph_path, metadata)
 
     metadata["timing"].update(
@@ -450,6 +452,30 @@ def process_video(video_path, parameters, output_settings, progress):
 
 
 def main():
+    if cli_requested():
+        video_paths, input_root = select_videos_cli()
+        if not video_paths:
+            return
+        def marker_values(name, color, hue):
+            return {
+                "color_name": color,
+                "target_hue": ask_int(f"{name}の色相H", hue, 0),
+                "hue_tolerance": ask_int(f"{name}の色相許容幅", 10, 0),
+                "min_saturation": ask_int(f"{name}の彩度S下限", 100, 0),
+                "min_value": ask_int(f"{name}の明度V下限", 80, 0),
+                "min_area": ask_int(f"{name}の最小面積", 100, 1),
+            }
+        parameters = {
+            "marker": marker_values("マーカー", "緑", 60),
+            "rotation_center": marker_values("回転中心", "赤", 0),
+        }
+        output_settings = output_settings_cli(video_key="video")
+        for video_path in video_paths:
+            output_dir = OUTPUTS_DIR / input_root.name / video_path.parent.relative_to(input_root) if input_root else OUTPUTS_DIR
+            with CliProgressWindow(count_total_frames(video_path), "色マーカ追跡") as progress:
+                process_video(video_path, parameters, output_settings, progress, output_dir)
+        return
+
     video_path = get_filepath()
     if not video_path:
         return

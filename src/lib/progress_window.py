@@ -12,7 +12,13 @@ class ProgressWindow:
         self.root.title(title)
         self.root.resizable(False, False)
 
-        self.status_label = tk.Label(self.root, text="処理を開始します")
+        self.status_label = tk.Label(
+            self.root,
+            text="処理を開始します",
+            width=96,
+            anchor="w",
+            justify="left",
+        )
         self.status_label.pack(padx=20, pady=(15, 5))
 
         self.progress_bar = ttk.Progressbar(

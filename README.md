@@ -244,6 +244,22 @@ MMCVはPyTorch・CUDAとの組み合わせに対応するビルドが必要で�
 .venv/bin/python src/rtmpose.py
 ```
 
+通常はGUIが起動します。ターミナルで対話式に指定する場合は、起動時に`--cli`を付けます。
+これはRTMPoseだけでなく、`mp_pose.py`、`color_marker.py`、`mp_pose_optical_flow.py`でも
+使用できます。各項目はEnterで初期値を採用できます。
+
+```bash
+.venv/bin/python src/rtmpose.py --cli
+.venv/bin/python src/mp_pose.py --cli
+.venv/bin/python src/color_marker.py --cli
+.venv/bin/python src/mp_pose_optical_flow.py --cli
+```
+
+CLIでは動画またはフォルダーのパスを入力できます。フォルダーを指定すると動画ファイルだけを
+再帰的に処理し、`datas/outputs/<フォルダー名>/`以下に入力フォルダーの構成を再現します。
+CLI実行中はTkinterの進捗ウィンドウを開かず、ターミナルに処理フレーム数、進捗率、経過時間、
+現在の動画名を表示します。
+
 画面操作は次の順番です。
 
 1. 解析する動画を複数選択するか、解析するフォルダーを選択します。
@@ -264,7 +280,7 @@ MMCVはPyTorch・CUDAとの組み合わせに対応するビルドが必要で�
 人物検出器の初期値`auto`は、選択した姿勢モデルに紐づく公式の既定検出器を使用します。
 通常は変更不要です。独自のMMDetection設定を使う場合だけ、モデル名または設定ファイルのパスを
 直接入力してください。
-
+pyt
 初回実行時には姿勢モデルと人物検出モデルが自動ダウンロードされるため、インターネット接続と
 空き容量が必要です。設定画面にはMMPoseのモデル名または設定ファイルのパスも直接入力できます。
 モデル指定が`body26`、または名前に`halpe26`を含む場合はHalpe 26点として扱い、それ以外は
